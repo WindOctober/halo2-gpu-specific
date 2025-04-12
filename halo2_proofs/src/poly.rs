@@ -12,6 +12,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, RangeFrom, RangeFull, Sub};
 
+use plonk_halo2::poly::Rotation as PRotation;
 pub mod commitment;
 mod domain;
 mod msm;
@@ -261,6 +262,10 @@ impl<'a, F: Field, B: Basis> Mul<F> for Polynomial<F, B> {
 /// rotations. Zero represents no rotation.
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub struct Rotation(pub i32);
+
+pub fn convert_rotation(rot: Rotation) -> PRotation {
+    PRotation(rot.0)
+}
 
 impl Rotation {
     /// The current location in the evaluation domain

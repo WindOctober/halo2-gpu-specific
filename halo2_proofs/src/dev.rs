@@ -614,8 +614,9 @@ impl<F: Field + Group> Assignment<F> for Parallel<MockProver<F>> {
     fn exit_region(&self) {
         let mut prover = self.lock().unwrap();
 
-        let (region, _) = prover.current_region.take().unwrap();
+        let (region, lock) = prover.current_region.take().unwrap();
         prover.regions.push(region);
+        drop(lock);
     }
 
     fn enable_selector<A, AR>(&self, _: A, selector: &Selector, row: usize) -> Result<(), Error>
@@ -1211,7 +1212,7 @@ impl<F: FieldExt> MockVerifier<F> {
                         .flat_map(|((input_value, row), shuffle_value)| {
                             if input_value != shuffle_value {
                                 Some(VerifyFailure::Shuffle {
-                                    name: shuffle.name.clone(),
+                                    name: shuffle.name,
                                     shuffle_index,
                                     location: FailureLocation::find_expressions(
                                         &self.cs,

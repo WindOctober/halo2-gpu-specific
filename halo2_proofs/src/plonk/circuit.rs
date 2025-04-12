@@ -1,22 +1,38 @@
+use super::range_check::RangeCheckRel;
+use super::{lookup, permutation, range_check, shuffle, Assigned, Error};
+use crate::circuit::Layouter;
+use crate::poly::convert_rotation;
+use crate::{circuit::Region, poly::Rotation};
+use blake2b_simd::Hash;
 use core::cmp::max;
 use core::ops::{Add, Mul};
-use ff::Field;
+use ff::{Field, PrimeField};
+use halo2_curves::bn256::Fr;
+use pairing::arithmetic::MultiMillerLoop;
+use plonk_halo2::arithmetic::Field as PField;
+use plonk_halo2::halo2curves::ff::PrimeField as ZkPrimeField;
+use plonk_halo2::plonk::lookup::Argument as PLookup;
+use plonk_halo2::plonk::sealed::SealedPhase;
+use plonk_halo2::plonk::{
+    permutation::Argument as PPermutation, Advice as PAdvice, AdviceQuery, Any as PAny,
+    Column as PColumn, ColumnType as PColumnType, ConstraintSystem as PConstraintSystem,
+    Expression as PExpression, FirstPhase, Fixed as PFixed, FixedQuery, Gate as PGate,
+    Instance as PInstance, InstanceQuery, Selector as PSelector, VirtualCell as PVirtualCell,
+};
+
+use std::collections::HashMap;
 use std::{
     convert::TryFrom,
     ops::{Neg, Sub},
 };
-
-use super::range_check::RangeCheckRel;
-use super::{lookup, permutation, range_check, shuffle, Assigned, Error};
-use crate::circuit::Layouter;
-use crate::{circuit::Region, poly::Rotation};
-
 mod compress_selectors;
 
 /// A column type
 pub trait ColumnType:
     'static + Sized + Copy + std::fmt::Debug + PartialEq + Eq + Into<Any>
 {
+    type P: PColumnType;
+    fn to_p(&self) -> Self::P;
 }
 
 /// A column with an index and type
@@ -24,6 +40,13 @@ pub trait ColumnType:
 pub struct Column<C: ColumnType> {
     pub index: usize,
     pub column_type: C,
+}
+
+pub fn convert_column<C: ColumnType>(col: Column<C>) -> PColumn<C::P> {
+    PColumn {
+        index: col.index,
+        column_type: col.column_type.to_p(),
+    }
 }
 
 impl<C: ColumnType> Column<C> {
@@ -108,10 +131,40 @@ impl PartialOrd for Any {
     }
 }
 
-impl ColumnType for Advice {}
-impl ColumnType for Fixed {}
-impl ColumnType for Instance {}
-impl ColumnType for Any {}
+impl ColumnType for Advice {
+    type P = PAdvice;
+
+    fn to_p(&self) -> Self::P {
+        PAdvice::default()
+    }
+}
+impl ColumnType for Fixed {
+    type P = PFixed;
+
+    fn to_p(&self) -> Self::P {
+        PFixed {}
+    }
+}
+
+impl ColumnType for Instance {
+    type P = PInstance;
+
+    fn to_p(&self) -> Self::P {
+        PInstance {}
+    }
+}
+
+impl ColumnType for Any {
+    type P = PAny;
+
+    fn to_p(&self) -> Self::P {
+        match *self {
+            Any::Advice => PAny::Advice(PAdvice::default()),
+            Any::Fixed => PAny::Fixed,
+            Any::Instance => PAny::Instance,
+        }
+    }
+}
 
 impl From<Advice> for Any {
     fn from(_: Advice) -> Any {
@@ -249,8 +302,11 @@ impl TryFrom<Column<Any>> for Column<Instance> {
 /// }
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Selector(pub(crate) usize, bool);
+pub struct Selector(pub usize, pub bool);
 
+pub fn convert_selector(sel: Selector) -> PSelector {
+    PSelector(sel.0, sel.1)
+}
 impl Selector {
     /// Enable this selector at the given offset within the given region.
     pub fn enable<F: Field>(&self, region: &Region<F>, offset: usize) -> Result<(), Error> {
@@ -489,6 +545,70 @@ pub enum Expression<F> {
     Product(Box<Expression<F>>, Box<Expression<F>>),
     /// This is a scaled polynomial
     Scaled(Box<Expression<F>>, F),
+}
+pub fn convert_expr_fr<E: MultiMillerLoop>(expr: Expression<E::Scalar>) -> PExpression<Fr> {
+    match expr {
+        Expression::Constant(c) => PExpression::Constant(from_scalar::<E>(c)),
+        Expression::Selector(selector) => PExpression::Selector(convert_selector(selector)),
+        Expression::Fixed {
+            query_index,
+            column_index,
+            rotation,
+        } => PExpression::Fixed(FixedQuery {
+            index: Some(query_index),
+            column_index,
+            rotation: convert_rotation(rotation),
+        }),
+        Expression::Advice {
+            query_index,
+            column_index,
+            rotation,
+        } => PExpression::Advice(AdviceQuery {
+            index: Some(query_index),
+            column_index,
+            rotation: convert_rotation(rotation),
+            phase: FirstPhase.to_sealed(),
+        }),
+        Expression::Instance {
+            query_index,
+            column_index,
+            rotation,
+        } => PExpression::Instance(InstanceQuery {
+            index: Some(query_index),
+            column_index,
+            rotation: convert_rotation(rotation),
+        }),
+        Expression::Negated(inner) => {
+            let inner_converted = convert_expr_fr::<E>(*inner);
+            PExpression::Negated(Box::new(inner_converted))
+        }
+        Expression::Sum(lhs, rhs) => {
+            let lhs_converted = convert_expr_fr::<E>(*lhs);
+            let rhs_converted = convert_expr_fr::<E>(*rhs);
+            PExpression::Sum(Box::new(lhs_converted), Box::new(rhs_converted))
+        }
+        Expression::Product(lhs, rhs) => {
+            let lhs_converted = convert_expr_fr::<E>(*lhs);
+            let rhs_converted = convert_expr_fr::<E>(*rhs);
+            PExpression::Product(Box::new(lhs_converted), Box::new(rhs_converted))
+        }
+        Expression::Scaled(inner, factor) => {
+            let inner_converted = convert_expr_fr::<E>(*inner);
+            let factor_converted = from_scalar::<E>(factor);
+            PExpression::Scaled(Box::new(inner_converted), factor_converted)
+        }
+    }
+}
+
+fn from_scalar<E: MultiMillerLoop>(scalar: E::Scalar) -> Fr {
+    let repr = scalar.to_repr();
+    let bytes: &[u8] = repr.as_ref();
+
+    let mut fr_repr = <Fr as halo2_curves::ff::PrimeField>::Repr::default();
+    // assert_eq!(bytes.len(), fr_repr.as_mut().len(), "Repr size mismatch");
+    fr_repr.as_mut().copy_from_slice(bytes);
+
+    Fr::from_repr(fr_repr).expect("invalid scalar repr for target Fr")
 }
 
 impl<F: Field> Expression<F> {
@@ -986,6 +1106,7 @@ impl<F: Field> Mul<F> for Expression<F> {
 
 /// Represents an index into a vector where each entry corresponds to a distinct
 /// point that polynomials are queried at.
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct PointIndex(pub usize);
 
@@ -1044,6 +1165,35 @@ pub struct Gate<F: Field> {
     pub queried_cells: Vec<VirtualCell>,
 }
 
+pub fn convert_gate<E: MultiMillerLoop>(gate: Gate<E::Scalar>) -> PGate<Fr> {
+    PGate {
+        name: gate.name.to_string(),
+        constraint_names: gate
+            .constraint_names
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        polys: gate.polys.into_iter().map(convert_expr_fr::<E>).collect(),
+        queried_selectors: gate
+            .queried_selectors
+            .into_iter()
+            .map(convert_selector)
+            .collect(),
+        queried_cells: gate
+            .queried_cells
+            .into_iter()
+            .map(convert_virtual_cell)
+            .collect(),
+    }
+}
+
+pub fn convert_virtual_cell(cell: VirtualCell) -> PVirtualCell {
+    PVirtualCell {
+        column: convert_column(cell.column),
+        rotation: convert_rotation(cell.rotation),
+    }
+}
+
 impl<F: Field> Gate<F> {
     pub(crate) fn new_with_polys_and_queries(
         polys: Vec<Expression<F>>,
@@ -1082,18 +1232,18 @@ impl<F: Field> Gate<F> {
 /// permutation arrangements.
 #[derive(Debug, Clone)]
 pub struct ConstraintSystem<F: Field> {
-    pub(crate) num_fixed_columns: usize,
+    pub num_fixed_columns: usize,
     pub num_advice_columns: usize,
     pub num_instance_columns: usize,
-    pub(crate) num_selectors: usize,
-    pub(crate) selector_map: Vec<Column<Fixed>>,
+    pub num_selectors: usize,
+    pub selector_map: Vec<Column<Fixed>>,
     pub gates: Vec<Gate<F>>,
     pub advice_queries: Vec<(Column<Advice>, Rotation)>,
     pub named_advices: Vec<(String, u32)>,
     // Contains an integer for each advice column
     // identifying how many distinct queries it has
     // so far; should be same length as num_advice_columns.
-    pub(crate) num_advice_queries: Vec<usize>,
+    pub num_advice_queries: Vec<usize>,
     pub instance_queries: Vec<(Column<Instance>, Rotation)>,
     pub fixed_queries: Vec<(Column<Fixed>, Rotation)>,
 
@@ -1114,9 +1264,67 @@ pub struct ConstraintSystem<F: Field> {
 
     // Vector of fixed columns, which can be used to store constant values
     // that are copied into advice columns.
-    pub(crate) constants: Vec<Column<Fixed>>,
+    pub constants: Vec<Column<Fixed>>,
 
-    pub(crate) minimum_degree: Option<usize>,
+    pub minimum_degree: Option<usize>,
+}
+
+pub fn convert_constraint_system_fr<E: MultiMillerLoop>(
+    cs: ConstraintSystem<E::Scalar>,
+) -> PConstraintSystem<Fr> {
+    PConstraintSystem {
+        num_fixed_columns: cs.num_fixed_columns,
+        num_advice_columns: cs.num_advice_columns,
+        num_instance_columns: cs.num_instance_columns,
+        num_selectors: cs.num_selectors,
+        num_challenges: 0,
+        advice_column_phase: vec![FirstPhase.to_sealed(); cs.num_advice_columns],
+        challenge_phase: vec![],
+        selector_map: cs.selector_map.into_iter().map(convert_column).collect(),
+        gates: cs.gates.into_iter().map(convert_gate::<E>).collect(),
+        advice_queries: cs
+            .advice_queries
+            .into_iter()
+            .map(|(col, rotation)| (convert_column(col), convert_rotation(rotation)))
+            .collect(),
+        num_advice_queries: cs.num_advice_queries,
+        instance_queries: cs
+            .instance_queries
+            .into_iter()
+            .map(|(col, rotation)| (convert_column(col), convert_rotation(rotation)))
+            .collect(),
+        fixed_queries: cs
+            .fixed_queries
+            .into_iter()
+            .map(|(col, rotation)| (convert_column(col), convert_rotation(rotation)))
+            .collect(),
+        permutation: {
+            let perm = cs.permutation;
+            PPermutation {
+                columns: perm.columns.into_iter().map(convert_column).collect(),
+            }
+        },
+        lookups: cs
+            .lookups
+            .into_iter()
+            .map(|lookup| PLookup {
+                name: lookup.name.to_string(),
+                input_expressions: lookup
+                    .input_expressions
+                    .into_iter()
+                    .map(convert_expr_fr::<E>)
+                    .collect(),
+                table_expressions: lookup
+                    .table_expressions
+                    .into_iter()
+                    .map(convert_expr_fr::<E>)
+                    .collect(),
+            })
+            .collect(),
+        general_column_annotations: HashMap::new(),
+        constants: cs.constants.into_iter().map(convert_column).collect(),
+        minimum_degree: cs.minimum_degree,
+    }
 }
 
 /// Represents the minimal parameters that determine a `ConstraintSystem`.

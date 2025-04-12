@@ -29,11 +29,13 @@ name = "plonk"
 harness = false
 
 [dependencies]
+plonk-halo2 = { package = "halo2_proofs" ,path = "../../halo2-hyper/halo2_proofs" }
 core_affinity = "0.5.10"
 ark-std = { version = "0.4.0" }
 backtrace = { version = "0.3", optional = true }
 ec-gpu-gen = { git = "https://github.com/lanbones/ec-gpu", branch = "halo2-opt-v2", optional = true }
-pairing = { git = "https://github.com/lanbones/pairing", package = "pairing_bn256"}
+pairing = { path = "../../pairing", package = "pairing_bn256"}
+halo2_curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", tag = "0.3.3", package = "halo2curves", features = ["derive_serde"] }
 rayon = "1.5.1"
 ff = "0.12"
 group = "0.12"
@@ -65,7 +67,6 @@ bumpalo = ">=3,<3.9.0"
 
 [build-dependencies]
 ec-gpu-gen = { git = "https://github.com/lanbones/ec-gpu", branch = "halo2-opt-v2", optional = true }
-pairing = { git = "https://github.com/lanbones/pairing", package = "pairing_bn256"}
 
 [dev-dependencies]
 assert_matches = "1.5"

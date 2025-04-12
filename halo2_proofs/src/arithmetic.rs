@@ -11,10 +11,11 @@ use ark_std::start_timer;
 pub use ff::Field;
 use group::cofactor::CofactorCurveAffine;
 use group::ff::BatchInvert;
-use group::ff::PrimeField;
+pub use group::ff::PrimeField;
 use group::Group as _;
 pub use pairing::arithmetic::*;
 use pairing::bn256::G1Affine;
+use plonk_halo2::arithmetic::Field as PField;
 use rayon::prelude::*;
 
 fn multiexp_serial<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C], acc: &mut C::Curve) {
