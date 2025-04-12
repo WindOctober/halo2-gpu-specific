@@ -1396,7 +1396,6 @@ dependencies = [
  "ec-gpu",
  "ff 0.12.1",
  "group 0.12.1",
- "halo2curves",
  "num-bigint",
  "num-traits",
  "rand",
