@@ -107,7 +107,7 @@ impl ParallelAssembly {
 
 #[derive(Debug, Clone)]
 pub struct Assembly {
-    pub(crate) mapping: Vec<Vec<(u32, u32)>>,
+    pub mapping: Vec<Vec<(u32, u32)>>,
 }
 
 impl From<ParallelAssembly> for Assembly {

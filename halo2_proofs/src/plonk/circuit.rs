@@ -548,7 +548,7 @@ pub enum Expression<F> {
 }
 pub fn convert_expr_fr<E: MultiMillerLoop>(expr: Expression<E::Scalar>) -> PExpression<Fr> {
     match expr {
-        Expression::Constant(c) => PExpression::Constant(from_scalar::<E>(c)),
+        Expression::Constant(c) => PExpression::Constant(from_scalar::<E>(&c)),
         Expression::Selector(selector) => PExpression::Selector(convert_selector(selector)),
         Expression::Fixed {
             query_index,
@@ -594,13 +594,13 @@ pub fn convert_expr_fr<E: MultiMillerLoop>(expr: Expression<E::Scalar>) -> PExpr
         }
         Expression::Scaled(inner, factor) => {
             let inner_converted = convert_expr_fr::<E>(*inner);
-            let factor_converted = from_scalar::<E>(factor);
+            let factor_converted = from_scalar::<E>(&factor);
             PExpression::Scaled(Box::new(inner_converted), factor_converted)
         }
     }
 }
 
-fn from_scalar<E: MultiMillerLoop>(scalar: E::Scalar) -> Fr {
+pub fn from_scalar<E: MultiMillerLoop>(scalar: &E::Scalar) -> Fr {
     let repr = scalar.to_repr();
     let bytes: &[u8] = repr.as_ref();
 

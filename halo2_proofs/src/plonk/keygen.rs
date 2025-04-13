@@ -231,6 +231,88 @@ impl<F: Field> Assignment<F> for AssemblyAssigner<F> {
     }
 }
 
+pub fn get_preprocess_polys_and_permutations<C, ConcreteCircuit>(
+    k: u32,
+    unusable_rows_start: usize,
+    circuit: &ConcreteCircuit,
+    config: &ConcreteCircuit::Config,
+) -> Result<
+    (
+        Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
+        Vec<Vec<(usize, usize)>>,
+    ),
+    Error,
+>
+where
+    C: CurveAffine,
+    ConcreteCircuit: Circuit<C::Scalar>,
+{
+    let mut cs = ConstraintSystem::default();
+    let _ = ConcreteCircuit::configure(&mut cs);
+    let mut assembly: AssemblyAssigner<C::Scalar> = AssemblyAssigner {
+        k,
+        fixed: Arc::new(Mutex::new(vec![
+            Polynomial {
+                values: vec![C::Scalar::zero().into(); 1 << k as usize],
+                _marker: PhantomData,
+            };
+            cs.num_fixed_columns
+        ])),
+        permutation: Arc::new(Mutex::new(permutation::keygen::ParallelAssembly::new(
+            1 << k as usize,
+            &cs.permutation,
+        ))),
+        selectors: Arc::new(Mutex::new(vec![
+            vec![false; 1 << k as usize];
+            cs.num_selectors
+        ])),
+        usable_rows: 0..unusable_rows_start,
+        _marker: PhantomData,
+    };
+
+    // Synthesize the circuit to obtain URS
+    ConcreteCircuit::FloorPlanner::synthesize(
+        &mut assembly,
+        circuit,
+        config.clone(),
+        cs.constants.clone(),
+    )?;
+
+    let assembly: Assembly<C::Scalar> = assembly.into();
+
+    let mut fixed = batch_invert_assigned(assembly.fixed);
+    fixed.extend(assembly.selectors.into_iter().map(|selectors| {
+        let values: Vec<_> = selectors
+            .into_iter()
+            .map(|selector| {
+                if selector {
+                    C::Scalar::one()
+                } else {
+                    C::Scalar::zero()
+                }
+            })
+            .collect();
+        Polynomial {
+            values,
+            _marker: PhantomData::<LagrangeCoeff>,
+        }
+    }));
+
+    let permutations: Vec<Vec<(usize, usize)>> = assembly
+        .permutation
+        .mapping
+        .into_iter()
+        .map(|cycle| {
+            cycle
+                .into_iter()
+                .map(|(a, b)| (a as usize, b as usize))
+                .collect()
+        })
+        .collect();
+
+    Ok((fixed, permutations))
+}
+
 /// Generate a `VerifyingKey` from an instance of `Circuit`.
 pub fn keygen_vk<C, ConcreteCircuit>(
     params: &Params<C>,

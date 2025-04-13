@@ -888,6 +888,40 @@ impl ParaSerializable for Assembly {
     }
 }
 
+pub fn get_witness<C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
+    k: u32,
+    instances: &[&[C::Scalar]],
+    unusable_rows_start: usize,
+    circuit: &ConcreteCircuit,
+) -> Result<Vec<Polynomial<C::Scalar, LagrangeCoeff>>, Error> {
+    let mut meta = ConstraintSystem::default();
+    let config = ConcreteCircuit::configure(&mut meta);
+    let mut witness = AssignWitnessCollectionAssigner::<C> {
+        k,
+        advice: Arc::new(Mutex::new(vec![
+            Polynomial {
+                values: vec![C::Scalar::zero().into(); 1 << k as usize],
+                _marker: PhantomData,
+            };
+            meta.num_advice_columns
+        ])),
+        instances,
+        usable_rows: ..unusable_rows_start,
+    };
+    ConcreteCircuit::FloorPlanner::synthesize(
+        &mut witness,
+        circuit,
+        config.clone(),
+        meta.constants.clone(),
+    )?;
+
+    let witness: AssignWitnessCollection<_> = witness.into();
+
+    let advice = batch_invert_assigned(witness.advice);
+
+    Ok(advice)
+}
+
 impl<'a, C: CurveAffine> AssignWitnessCollection<'a, C> {
     pub fn store_witness<ConcreteCircuit: Circuit<C::Scalar>>(
         params: &Params<C>,
