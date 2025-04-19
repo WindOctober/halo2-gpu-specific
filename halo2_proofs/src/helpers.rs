@@ -887,16 +887,177 @@ impl ParaSerializable for Assembly {
         Ok(())
     }
 }
+#[derive(Clone, Debug)]
+pub struct WitnessCollector<'a, C: CurveAffine> {
+    /// The circuit’s logarithmic degree parameter, such that the
+    /// total number of rows is 2^k.
+    pub k: u32,
 
-pub fn get_witness<C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
+    /// A thread-safe container holding the assigned values for each
+    /// advice column, represented as polynomials over the field.
+    pub advice: Arc<Mutex<Vec<Polynomial<Assigned<C::Scalar>, LagrangeCoeff>>>>,
+
+    /// Immutable references to the instance column data, indexed by
+    /// column and then by row.
+    pub instances: &'a [&'a [C::Scalar]],
+
+    /// A bijective mapping from each logical row index to its
+    /// corresponding physical row index in the underlying buffers.
+    pub row_mapping: &'a Vec<usize>,
+
+    _marker: PhantomData<C>,
+}
+
+impl<'a, C: CurveAffine> Into<AssignWitnessCollection<'a, C>> for WitnessCollector<'a, C> {
+    /// Converts this collector into a concrete `AssignWitnessCollection`,
+    /// unwrapping internal buffers and establishing the usable row range
+    /// based on the provided mapping length.
+    fn into(self) -> AssignWitnessCollection<'a, C> {
+        AssignWitnessCollection {
+            k: self.k,
+            advice: Arc::try_unwrap(self.advice)
+                .expect("Mutex unwrapping failed")
+                .into_inner()
+                .expect("Poisoned mutex"),
+            instances: self.instances,
+            usable_rows: ..self.row_mapping.len(),
+        }
+    }
+}
+
+impl<'a, C: CurveAffine> Assignment<C::Scalar> for WitnessCollector<'a, C> {
+    /// Indicates that this collector operates in prove-mode, i.e.,
+    /// recording witness values.
+    fn is_in_prove_mode(&self) -> bool {
+        true
+    }
+
+    /// Marks the entry of a named synthesis region. No action required
+    /// for witness collection.
+    fn enter_region<NR, N>(&self, _: N)
+    where
+        NR: Into<String>,
+        N: FnOnce() -> NR,
+    {
+        // Intentionally left blank.
+    }
+
+    /// Marks the exit of the current synthesis region. No action required.
+    fn exit_region(&self) {
+        // Intentionally left blank.
+    }
+
+    /// Selectors are not pertinent to witness collection and thus are
+    /// not recorded.
+    fn enable_selector<A, AR>(&self, _: A, _: &Selector, _: usize) -> Result<(), Error>
+    where
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        Ok(())
+    }
+
+    /// Retrieves the assigned instance value at a given logical row,
+    /// mapping through `row_mapping` and enforcing bounds.
+    fn query_instance(
+        &self,
+        column: Column<Instance>,
+        row: usize,
+    ) -> Result<Option<C::Scalar>, Error> {
+        self.instances
+            .get(column.index())
+            .and_then(|col| col.get(row))
+            .copied()
+            .map(Some)
+            .ok_or(Error::BoundsFailure)
+    }
+
+    /// Records an advice assignment by mapping the logical row through
+    /// `row_mapping` and updating the corresponding polynomial slot.
+    fn assign_advice<V, VR, A, AR>(
+        &self,
+        _: A,
+        column: Column<Advice>,
+        virtual_row: usize,
+        to: V,
+    ) -> Result<(), Error>
+    where
+        V: FnOnce() -> Result<VR, Error>,
+        VR: Into<Assigned<C::Scalar>>,
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        let real_row = *self
+            .row_mapping
+            .get(virtual_row)
+            .ok_or(Error::not_enough_rows_available(self.k))?;
+
+        let mut advice = self.advice.lock().unwrap();
+        *advice
+            .get_mut(column.index())
+            .and_then(|col| col.get_mut(real_row))
+            .ok_or(Error::BoundsFailure)? = to()?.into();
+
+        Ok(())
+    }
+
+    /// Fixed-column assignments are not captured by this collector.
+    fn assign_fixed<V, VR, A, AR>(
+        &self,
+        _: A,
+        _: Column<Fixed>,
+        _: usize,
+        _: V,
+    ) -> Result<(), Error>
+    where
+        V: FnOnce() -> Result<VR, Error>,
+        VR: Into<Assigned<C::Scalar>>,
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        Ok(())
+    }
+
+    /// Copy constraints are not relevant for witness extraction.
+    fn copy(&self, _: Column<Any>, _: usize, _: Column<Any>, _: usize) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Bulk fills are not pertinent for witness collection.
+    fn fill_from_row(
+        &self,
+        _: Column<Fixed>,
+        _: usize,
+        _: Option<Assigned<C::Scalar>>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Namespaces are metadata only and do not affect witness values.
+    fn push_namespace<NR, N>(&self, _: N)
+    where
+        NR: Into<String>,
+        N: FnOnce() -> NR,
+    {
+        // Intentionally left blank.
+    }
+
+    /// Exits a namespace; no operation required for witness data.
+    fn pop_namespace(&self, _: Option<String>) {
+        // Intentionally left blank.
+    }
+}
+
+pub fn get_witness<'a, C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
     k: u32,
-    instances: &[&[C::Scalar]],
-    unusable_rows_start: usize,
+    instances: &'a [&'a [C::Scalar]],
+    row_mapping: &'a Vec<usize>,
     circuit: &ConcreteCircuit,
 ) -> Result<Vec<Polynomial<C::Scalar, LagrangeCoeff>>, Error> {
     let mut meta = ConstraintSystem::default();
     let config = ConcreteCircuit::configure(&mut meta);
-    let mut witness = AssignWitnessCollectionAssigner::<C> {
+
+    let mut collector = WitnessCollector {
         k,
         advice: Arc::new(Mutex::new(vec![
             Polynomial {
@@ -906,20 +1067,19 @@ pub fn get_witness<C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
             meta.num_advice_columns
         ])),
         instances,
-        usable_rows: ..unusable_rows_start,
+        row_mapping,
+        _marker: PhantomData,
     };
+
     ConcreteCircuit::FloorPlanner::synthesize(
-        &mut witness,
+        &mut collector,
         circuit,
         config.clone(),
         meta.constants.clone(),
     )?;
 
-    let witness: AssignWitnessCollection<_> = witness.into();
-
-    let advice = batch_invert_assigned(witness.advice);
-
-    Ok(advice)
+    let awc: AssignWitnessCollection<'a, C> = collector.into();
+    Ok(batch_invert_assigned(awc.advice))
 }
 
 impl<'a, C: CurveAffine> AssignWitnessCollection<'a, C> {
