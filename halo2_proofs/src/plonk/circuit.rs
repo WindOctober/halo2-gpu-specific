@@ -166,6 +166,15 @@ impl ColumnType for Any {
     }
 }
 
+impl From<PAny> for Any {
+    fn from(value: PAny) -> Self {
+        match value {
+            PAny::Advice(_) => Any::Advice,
+            PAny::Fixed => Any::Fixed,
+            PAny::Instance => Any::Instance,
+        }
+    }
+}
 impl From<Advice> for Any {
     fn from(_: Advice) -> Any {
         Any::Advice

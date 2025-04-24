@@ -1000,6 +1000,7 @@ dependencies = [
  "gumdrop",
  "halo2_proofs 0.2.0",
  "halo2curves",
+ "itertools",
  "lazy_static",
  "log",
  "memmap",

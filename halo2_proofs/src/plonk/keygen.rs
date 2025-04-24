@@ -1,6 +1,7 @@
 #![allow(clippy::int_plus_one)]
 
 use std::{
+    collections::{HashMap, HashSet},
     marker::PhantomData,
     ops::Range,
     sync::{Arc, Mutex},
@@ -10,6 +11,7 @@ use ark_std::{end_timer, start_timer};
 use ff::Field;
 use group::Curve;
 use pairing::arithmetic::FieldExt;
+use plonk_halo2::plonk::Any as PAny;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 use super::{
@@ -87,7 +89,7 @@ struct PreprocessCollector<'a, F: Field> {
     pub fixeds: Arc<Mutex<Vec<Polynomial<Assigned<F>, LagrangeCoeff>>>>,
 
     /// Permutation gadget collecting copy constraints.
-    pub permutation: Arc<Mutex<permutation::keygen::ParallelAssembly>>,
+    pub permutation: Arc<Mutex<permutation::keygen::Permutation>>,
 
     /// Boolean selectors, indexed by (selector_index, real_row).
     pub selectors: Arc<Mutex<Vec<Vec<bool>>>>,
@@ -260,7 +262,9 @@ impl<'a, F: Field> Into<Assembly<F>> for PreprocessCollector<'a, F> {
         Assembly {
             k: self.k,
             fixed,
-            permutation: permutation::keygen::Assembly::from(perm),
+            permutation: permutation::keygen::Assembly {
+                mapping: perm.into_cycles(),
+            },
             selectors: sels,
             usable_rows: 0..self.row_mapping.len(),
             _marker: PhantomData,
@@ -424,6 +428,7 @@ impl<F: Field> Assignment<F> for AssemblyAssigner<F> {
 pub fn get_preprocess_polys_and_permutations<'a, C, ConcreteCircuit>(
     k: u32,
     row_mapping: &'a Vec<usize>,
+    permutation_idx: HashMap<(PAny, usize), usize>,
     circuit: &ConcreteCircuit,
     config: &ConcreteCircuit::Config,
 ) -> Result<
@@ -440,6 +445,12 @@ where
     let mut cs = ConstraintSystem::default();
     let _ = ConcreteCircuit::configure(&mut cs);
 
+    use std::iter::Iterator;
+    let permutation_idx: HashMap<(Any, usize), usize> = permutation_idx
+        .iter()
+        .map(|(&(pany, local_idx), &global_idx)| ((pany.into(), local_idx), global_idx))
+        .collect();
+
     let mut assembly: PreprocessCollector<'a, C::Scalar> = PreprocessCollector {
         k,
         fixeds: Arc::new(Mutex::new(vec![
@@ -449,9 +460,8 @@ where
             };
             cs.num_fixed_columns
         ])),
-        permutation: Arc::new(Mutex::new(permutation::keygen::ParallelAssembly::new(
-            1 << k as usize,
-            &cs.permutation,
+        permutation: Arc::new(Mutex::new(permutation::keygen::Permutation::new(
+            permutation_idx,
         ))),
         selectors: Arc::new(Mutex::new(vec![
             vec![false; 1 << k as usize];
@@ -500,7 +510,6 @@ where
                 .collect()
         })
         .collect();
-
     Ok((fixed, permutations))
 }
 
