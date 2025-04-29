@@ -162,7 +162,7 @@ pub fn create_single_instances<C: CurveAffine, E: EncodedChallenge<C>, T: Transc
     Ok(instance)
 }
 
-fn sort<Scalar: FieldExt>(
+pub fn sort<Scalar: FieldExt>(
     origin_advice: &[Scalar],
     sort_advice: &mut [Scalar],
     argument: &RangeCheckRel<Scalar>,

@@ -1,5 +1,6 @@
 use crate::plonk::circuit::FloorPlanner;
-use crate::plonk::range_check::RangeCheckRel;
+use crate::plonk::range_check::{RangeCheckRel, RangeCheckRelAssigner};
+use crate::plonk::sort;
 use crate::{
     arithmetic::{CurveAffine, FieldExt},
     plonk::{generate_pk_info, keygen_pk_from_info},
@@ -21,6 +22,7 @@ use num;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use std::collections::HashMap;
 use std::io::Seek;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -1078,8 +1080,97 @@ pub fn get_witness<'a, C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
         meta.constants.clone(),
     )?;
 
+    fn get_two_mut<T>(slice: &mut [T], i: usize, j: usize) -> (&mut T, &mut T) {
+        assert!(i != j, "indices must differ");
+        if i < j {
+            let (head, tail) = slice.split_at_mut(j);
+            (&mut head[i], &mut tail[0])
+        } else {
+            let (head, tail) = slice.split_at_mut(i);
+            (&mut tail[0], &mut head[j])
+        }
+    }
+
     let awc: AssignWitnessCollection<'a, C> = collector.into();
-    Ok(batch_invert_assigned(awc.advice))
+    let mut polys = batch_invert_assigned(awc.advice);
+
+    {
+        let domain_n = 1u64 << k;
+        let blinding = meta.blinding_factors() as u64;
+
+        let last_active_offset = domain_n - (blinding + 1) - 1;
+        let unusable_rows_start = (domain_n as usize) - ((blinding + 1) as usize);
+
+        for arg in &meta.range_check.0 {
+            let col = arg.origin.index;
+            let mut vr = last_active_offset as usize;
+            let assigner: RangeCheckRelAssigner = arg.into();
+
+            for v in assigner {
+                let rr = row_mapping[vr];
+                polys[col].values[rr] = C::ScalarExt::from(v as u64);
+                vr -= 1;
+            }
+        }
+
+        for arg in &meta.range_check.0 {
+            let a = arg.origin.index;
+            let b = arg.sort.index;
+
+            let (origin_poly, sort_poly) = get_two_mut(&mut polys, a, b);
+            sort_with_mapping::<C::ScalarExt>(
+                &origin_poly.values,
+                &mut sort_poly.values,
+                arg,
+                row_mapping,
+                unusable_rows_start,
+            );
+        }
+    }
+
+    Ok(polys)
+}
+
+pub fn sort_with_mapping<Scalar: FieldExt>(
+    origin_advice: &[Scalar],
+    sort_advice: &mut [Scalar],
+    argument: &RangeCheckRel<Scalar>,
+    row_mapping: &[usize],
+    unusable_rows_start: usize,
+) {
+    let range = (argument.max.0 as usize)
+        .saturating_sub(argument.min.0 as usize)
+        .saturating_add(1);
+    let mut field_to_u32_map = HashMap::<[u64; 4], u32>::with_capacity(range);
+    let mut count_map = vec![0usize; range];
+
+    let mut cur = argument.min.1;
+    for idx in argument.min.0..=argument.max.0 {
+        let raw = unsafe { std::mem::transmute::<_, &[u64; 4]>(&cur) };
+        field_to_u32_map.insert(*raw, idx);
+        cur += Scalar::one();
+    }
+
+    for vr in 0..unusable_rows_start {
+        let rr = row_mapping[vr];
+        let val = &origin_advice[rr];
+        let raw = unsafe { std::mem::transmute::<_, &[u64; 4]>(val) };
+        let mapped = field_to_u32_map.get(raw).expect("value not in range.");
+        let bucket = (*mapped as usize).saturating_sub(argument.min.0 as usize);
+        count_map[bucket] += 1;
+    }
+
+    let mut offset = 0;
+    let mut val = argument.min.1;
+    for cnt in count_map {
+        for _ in 0..cnt {
+            let vr = offset;
+            let rr = row_mapping[vr];
+            sort_advice[rr] = val;
+            offset += 1;
+        }
+        val += Scalar::one();
+    }
 }
 
 impl<'a, C: CurveAffine> AssignWitnessCollection<'a, C> {
