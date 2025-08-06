@@ -35,9 +35,7 @@ ark-std = { version = "0.4.0" }
 backtrace = { version = "0.3", optional = true }
 ec-gpu-gen = { git = "https://github.com/lanbones/ec-gpu", branch = "halo2-opt-v2", optional = true }
 pairing = { git = "https://github.com/lanbones/pairing", package = "pairing_bn256" }
-halo2_curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", tag = "0.3.3", package = "halo2curves", features = [
-    "derive_serde",
-] }
+halo2_curves = { git = "https://github.com/han0110/halo2curves", branch = "feature/hash-to-curve", package = "halo2curves" }
 rayon = "1.5.1"
 ff = "0.12"
 group = "0.12"
