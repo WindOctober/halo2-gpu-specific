@@ -163,35 +163,35 @@ impl<C: CurveAffine> CircuitData<C> {
         })
     }
 
-    pub fn read(reader: &mut File) -> io::Result<Self> {
-        let vkey = Self::read_vkey(reader)?;
+    // pub fn read(reader: &mut File) -> io::Result<Self> {
+    //     let vkey = Self::read_vkey(reader)?;
 
-        let fixed = Vec::fetch(reader)?;
-        let permutation = Assembly::vec_fetch(reader)?;
+    //     let fixed = Vec::fetch(reader)?;
+    //     let permutation = Assembly::vec_fetch(reader)?;
 
-        Ok(CircuitData {
-            vkey,
-            fixed,
-            permutation,
-        })
-    }
+    //     Ok(CircuitData {
+    //         vkey,
+    //         fixed,
+    //         permutation,
+    //     })
+    // }
 
-    pub fn write(&self, fd: &mut File) -> io::Result<()> {
-        use std::io::Write;
+    // pub fn write(&self, fd: &mut File) -> io::Result<()> {
+    //     use std::io::Write;
 
-        let j = (self.vkey.domain.get_quotient_poly_degree() + 1) as u32; // quotient_poly_degree is j-1
-        let k = self.vkey.domain.k() as u32;
-        fd.write(&mut j.to_le_bytes())?;
-        fd.write(&mut k.to_le_bytes())?;
-        write_cs::<C, _>(&self.vkey.cs, fd)?;
+    //     let j = (self.vkey.domain.get_quotient_poly_degree() + 1) as u32; // quotient_poly_degree is j-1
+    //     let k = self.vkey.domain.k() as u32;
+    //     fd.write(&mut j.to_le_bytes())?;
+    //     fd.write(&mut k.to_le_bytes())?;
+    //     write_cs::<C, _>(&self.vkey.cs, fd)?;
 
-        self.vkey.write(fd)?;
+    //     self.vkey.write(fd)?;
 
-        self.fixed.store(fd)?;
-        self.permutation.vec_store(fd)?;
+    //     self.fixed.store(fd)?;
+    //     self.permutation.vec_store(fd)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     pub fn into_proving_key(self, params: &Params<C>) -> ProvingKey<C> {
         keygen_pk_from_info(params, &self.vkey, self.fixed, self.permutation).unwrap()

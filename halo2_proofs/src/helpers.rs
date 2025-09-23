@@ -17,7 +17,6 @@ use crate::{
     transcript::EncodedChallenge,
 };
 use ff::Field;
-use memmap::{MmapMut, MmapOptions};
 use num;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
@@ -113,73 +112,73 @@ impl Serializable for (String, u32) {
     }
 }
 
-impl ParaSerializable for Vec<Vec<(u32, u32)>> {
-    fn vec_fetch(fd: &mut File) -> io::Result<Self> {
-        let columns = read_u32(fd)?;
-        let mut offset = 0;
-        let mut offsets = vec![];
-        for _ in 0..columns {
-            let l = read_u32(fd)?;
-            offsets.push((offset, l));
-            offset = offset + l;
-        }
-        let position = fd.stream_position()?;
-        let res: Vec<Vec<(u32, u32)>> = (0..columns)
-            .into_par_iter()
-            .map(|i| {
-                let mmap = unsafe {
-                    MmapOptions::new()
-                        .offset(position + (offsets[i as usize].0 as u64 * 8))
-                        .len(offsets[i as usize].1 as usize * 8)
-                        .map(&fd)
-                        .unwrap()
-                };
-                let s: &[(u32, u32)] = unsafe {
-                    std::slice::from_raw_parts(
-                        mmap.as_ptr() as *const (u32, u32),
-                        offsets[i as usize].1 as usize,
-                    )
-                };
-                let mut s2 = vec![];
-                s2.extend_from_slice(s);
-                s2
-            })
-            .collect();
-        Ok(res)
-    }
+// impl ParaSerializable for Vec<Vec<(u32, u32)>> {
+//     fn vec_fetch(fd: &mut File) -> io::Result<Self> {
+//         let columns = read_u32(fd)?;
+//         let mut offset = 0;
+//         let mut offsets = vec![];
+//         for _ in 0..columns {
+//             let l = read_u32(fd)?;
+//             offsets.push((offset, l));
+//             offset = offset + l;
+//         }
+//         let position = fd.stream_position()?;
+//         let res: Vec<Vec<(u32, u32)>> = (0..columns)
+//             .into_par_iter()
+//             .map(|i| {
+//                 let mmap = unsafe {
+//                     MmapOptions::new()
+//                         .offset(position + (offsets[i as usize].0 as u64 * 8))
+//                         .len(offsets[i as usize].1 as usize * 8)
+//                         .map(&fd)
+//                         .unwrap()
+//                 };
+//                 let s: &[(u32, u32)] = unsafe {
+//                     std::slice::from_raw_parts(
+//                         mmap.as_ptr() as *const (u32, u32),
+//                         offsets[i as usize].1 as usize,
+//                     )
+//                 };
+//                 let mut s2 = vec![];
+//                 s2.extend_from_slice(s);
+//                 s2
+//             })
+//             .collect();
+//         Ok(res)
+//     }
 
-    fn vec_store(&self, fd: &mut File) -> io::Result<()> {
-        let u = self.len() as u32;
-        u.store(fd)?;
-        let mut offset = 0;
-        let mut offsets = vec![];
-        for i in 0..u {
-            let l = self[i as usize].len();
-            offsets.push((offset, l));
-            offset = offset + l;
-            (l as u32).store(fd)?;
-        }
-        let position = fd.stream_position()?;
-        fd.set_len(position + (offset as u64 * 8)).unwrap();
-        self.into_par_iter().enumerate().for_each(|(i, s2)| {
-            let mut mmap = unsafe {
-                MmapOptions::new()
-                    .offset(position + (offsets[i as usize].0 as u64 * 8))
-                    .len(offsets[i as usize].1 as usize * 8)
-                    .map_mut(&fd)
-                    .unwrap()
-            };
-            let s: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    s2.as_ptr() as *const u8,
-                    offsets[i as usize].1 as usize * 8,
-                )
-            };
-            (&mut mmap).copy_from_slice(s);
-        });
-        Ok(())
-    }
-}
+//     fn vec_store(&self, fd: &mut File) -> io::Result<()> {
+//         let u = self.len() as u32;
+//         u.store(fd)?;
+//         let mut offset = 0;
+//         let mut offsets = vec![];
+//         for i in 0..u {
+//             let l = self[i as usize].len();
+//             offsets.push((offset, l));
+//             offset = offset + l;
+//             (l as u32).store(fd)?;
+//         }
+//         let position = fd.stream_position()?;
+//         fd.set_len(position + (offset as u64 * 8)).unwrap();
+//         self.into_par_iter().enumerate().for_each(|(i, s2)| {
+//             let mut mmap = unsafe {
+//                 MmapOptions::new()
+//                     .offset(position + (offsets[i as usize].0 as u64 * 8))
+//                     .len(offsets[i as usize].1 as usize * 8)
+//                     .map_mut(&fd)
+//                     .unwrap()
+//             };
+//             let s: &[u8] = unsafe {
+//                 std::slice::from_raw_parts(
+//                     s2.as_ptr() as *const u8,
+//                     offsets[i as usize].1 as usize * 8,
+//                 )
+//             };
+//             (&mut mmap).copy_from_slice(s);
+//         });
+//         Ok(())
+//     }
+// }
 
 impl<B: Clone, F: FieldExt> Serializable for Polynomial<F, B> {
     fn fetch<R: io::Read>(reader: &mut R) -> io::Result<Self> {
@@ -873,22 +872,22 @@ impl<B: Clone, F: FieldExt> Serializable for Polynomial<Assigned<F>, B> {
     }
 }
 
-impl ParaSerializable for Assembly {
-    fn vec_fetch(fd: &mut File) -> io::Result<Self> {
-        let assembly = Assembly {
-            mapping: Vec::<Vec<(u32, u32)>>::vec_fetch(fd)?,
-        };
-        Ok(assembly)
-    }
-    /// Reads a compressed element from the buffer and attempts to parse it
-    /// using `from_bytes`.
-    fn vec_store(&self, fd: &mut File) -> io::Result<()> {
-        //self.columns.store(writer)?;
-        self.mapping.vec_store(fd)?;
+// impl ParaSerializable for Assembly {
+//     fn vec_fetch(fd: &mut File) -> io::Result<Self> {
+//         let assembly = Assembly {
+//             mapping: Vec::<Vec<(u32, u32)>>::vec_fetch(fd)?,
+//         };
+//         Ok(assembly)
+//     }
+//     /// Reads a compressed element from the buffer and attempts to parse it
+//     /// using `from_bytes`.
+//     fn vec_store(&self, fd: &mut File) -> io::Result<()> {
+//         //self.columns.store(writer)?;
+//         self.mapping.vec_store(fd)?;
 
-        Ok(())
-    }
-}
+//         Ok(())
+//     }
+// }
 #[derive(Clone, Debug)]
 pub struct WitnessCollector<'a, C: CurveAffine> {
     /// The circuit’s logarithmic degree parameter, such that the
@@ -1173,103 +1172,103 @@ pub fn sort_with_mapping<Scalar: FieldExt>(
     }
 }
 
-impl<'a, C: CurveAffine> AssignWitnessCollection<'a, C> {
-    pub fn store_witness<ConcreteCircuit: Circuit<C::Scalar>>(
-        params: &Params<C>,
-        pk: &ProvingKey<C>,
-        instances: &[&[C::Scalar]],
-        unusable_rows_start: usize,
-        circuit: &ConcreteCircuit,
-        fd: &mut File,
-    ) -> Result<(), Error> {
-        use std::io::prelude::*;
-        let mut meta = ConstraintSystem::default();
-        let config = ConcreteCircuit::configure(&mut meta);
+// impl<'a, C: CurveAffine> AssignWitnessCollection<'a, C> {
+//     pub fn store_witness<ConcreteCircuit: Circuit<C::Scalar>>(
+//         params: &Params<C>,
+//         pk: &ProvingKey<C>,
+//         instances: &[&[C::Scalar]],
+//         unusable_rows_start: usize,
+//         circuit: &ConcreteCircuit,
+//         fd: &mut File,
+//     ) -> Result<(), Error> {
+//         use std::io::prelude::*;
+//         let mut meta = ConstraintSystem::default();
+//         let config = ConcreteCircuit::configure(&mut meta);
 
-        let domain = &pk.get_vk().domain;
-        let meta = &pk.get_vk().cs;
-        let mut witness = AssignWitnessCollectionAssigner::<C> {
-            k: params.k,
-            advice: Arc::new(Mutex::new(vec![
-                domain.empty_lagrange_assigned();
-                meta.num_advice_columns
-            ])),
-            instances,
-            // The prover will not be allowed to assign values to advice
-            // cells that exist within inactive rows, which include some
-            // number of blinding factors and an extra row for use in the
-            // permutation argument.
-            usable_rows: ..unusable_rows_start,
-        };
+//         let domain = &pk.get_vk().domain;
+//         let meta = &pk.get_vk().cs;
+//         let mut witness = AssignWitnessCollectionAssigner::<C> {
+//             k: params.k,
+//             advice: Arc::new(Mutex::new(vec![
+//                 domain.empty_lagrange_assigned();
+//                 meta.num_advice_columns
+//             ])),
+//             instances,
+//             // The prover will not be allowed to assign values to advice
+//             // cells that exist within inactive rows, which include some
+//             // number of blinding factors and an extra row for use in the
+//             // permutation argument.
+//             usable_rows: ..unusable_rows_start,
+//         };
 
-        // Synthesize the circuit to obtain the witness and other information.
-        ConcreteCircuit::FloorPlanner::synthesize(
-            &mut witness,
-            circuit,
-            config.clone(),
-            meta.constants.clone(),
-        )?;
+//         // Synthesize the circuit to obtain the witness and other information.
+//         ConcreteCircuit::FloorPlanner::synthesize(
+//             &mut witness,
+//             circuit,
+//             config.clone(),
+//             meta.constants.clone(),
+//         )?;
 
-        let witness: AssignWitnessCollection<_> = witness.into();
+//         let witness: AssignWitnessCollection<_> = witness.into();
 
-        let bundlesize = params.k + 5;
-        let advice = batch_invert_assigned(witness.advice);
-        fd.set_len(4 + (1u64 << bundlesize)).unwrap();
-        fd.write(&(advice.len() as u32).to_le_bytes())?;
-        fd.set_len(4 + ((advice.len() as u64) << bundlesize))
-            .unwrap();
-        {
-            advice.into_par_iter().enumerate().for_each(|(i, s2)| {
-                let mut mmap = unsafe {
-                    MmapOptions::new()
-                        .offset(4 + ((i as u64) << bundlesize))
-                        .len(1 << bundlesize)
-                        .map_mut(&fd)
-                        .unwrap()
-                };
-                let s: &[u8] = unsafe {
-                    std::slice::from_raw_parts(
-                        s2.as_ptr() as *const C::Scalar as *const u8,
-                        1 << bundlesize,
-                    )
-                };
-                (&mut mmap).copy_from_slice(s);
-            });
-        }
-        println!("witness stored!");
+//         let bundlesize = params.k + 5;
+//         let advice = batch_invert_assigned(witness.advice);
+//         fd.set_len(4 + (1u64 << bundlesize)).unwrap();
+//         fd.write(&(advice.len() as u32).to_le_bytes())?;
+//         fd.set_len(4 + ((advice.len() as u64) << bundlesize))
+//             .unwrap();
+//         {
+//             advice.into_par_iter().enumerate().for_each(|(i, s2)| {
+//                 let mut mmap = unsafe {
+//                     MmapOptions::new()
+//                         .offset(4 + ((i as u64) << bundlesize))
+//                         .len(1 << bundlesize)
+//                         .map_mut(&fd)
+//                         .unwrap()
+//                 };
+//                 let s: &[u8] = unsafe {
+//                     std::slice::from_raw_parts(
+//                         s2.as_ptr() as *const C::Scalar as *const u8,
+//                         1 << bundlesize,
+//                     )
+//                 };
+//                 (&mut mmap).copy_from_slice(s);
+//             });
+//         }
+//         println!("witness stored!");
 
-        //witness.advice.store(writer)?;
-        Ok(())
-    }
+//         //witness.advice.store(writer)?;
+//         Ok(())
+//     }
 
-    pub fn fetch_witness(
-        params: &Params<C>,
-        fd: &mut File,
-    ) -> Result<Vec<Polynomial<C::Scalar, LagrangeCoeff>>, Error> {
-        let len = read_u32(fd)?;
-        let bundlesize = params.k + 5;
-        let advice: Vec<Polynomial<_, LagrangeCoeff>> = (0..len)
-            .into_par_iter()
-            .map(|i| {
-                let mmap = unsafe {
-                    MmapOptions::new()
-                        .offset(4 + ((i as u64) << bundlesize))
-                        .len(1 << bundlesize)
-                        .map(&fd)
-                        .unwrap()
-                };
-                let s: &[C::Scalar] = unsafe {
-                    std::slice::from_raw_parts(mmap.as_ptr() as *const C::Scalar, 1 << params.k)
-                };
-                let mut s2 = vec![];
-                s2.extend_from_slice(s);
-                Polynomial::new(s2)
-            })
-            .collect();
+//     pub fn fetch_witness(
+//         params: &Params<C>,
+//         fd: &mut File,
+//     ) -> Result<Vec<Polynomial<C::Scalar, LagrangeCoeff>>, Error> {
+//         let len = read_u32(fd)?;
+//         let bundlesize = params.k + 5;
+//         let advice: Vec<Polynomial<_, LagrangeCoeff>> = (0..len)
+//             .into_par_iter()
+//             .map(|i| {
+//                 let mmap = unsafe {
+//                     MmapOptions::new()
+//                         .offset(4 + ((i as u64) << bundlesize))
+//                         .len(1 << bundlesize)
+//                         .map(&fd)
+//                         .unwrap()
+//                 };
+//                 let s: &[C::Scalar] = unsafe {
+//                     std::slice::from_raw_parts(mmap.as_ptr() as *const C::Scalar, 1 << params.k)
+//                 };
+//                 let mut s2 = vec![];
+//                 s2.extend_from_slice(s);
+//                 Polynomial::new(s2)
+//             })
+//             .collect();
 
-        Ok(advice)
-    }
-}
+//         Ok(advice)
+//     }
+// }
 
 #[derive(FromPrimitive)]
 enum AssignedCode {
@@ -1320,43 +1319,43 @@ impl<F: FieldExt> Serializable for Assigned<F> {
     }
 }
 
-#[deprecated = "use CircuitData::new instead"]
-pub fn store_pk_info<C: CurveAffine, ConcreteCircuit>(
-    params: &Params<C>,
-    vk: &VerifyingKey<C>,
-    circuit: &ConcreteCircuit,
-    //writer: &mut W,
-    fd: &mut File,
-) -> io::Result<()>
-where
-    ConcreteCircuit: Circuit<C::Scalar>,
-{
-    use ark_std::{end_timer, start_timer};
-    let timer = start_timer!(|| "test generate_pk_info ...");
-    let (fixed, permutation) = generate_pk_info(params, vk, circuit).unwrap();
-    end_timer!(timer);
-    let timer = start_timer!(|| "test store fixed ...");
-    fixed.store(fd)?;
-    end_timer!(timer);
-    let timer = start_timer!(|| "test store permutation ...");
-    permutation.vec_store(fd)?;
-    end_timer!(timer);
-    Ok(())
-}
+// #[deprecated = "use CircuitData::new instead"]
+// pub fn store_pk_info<C: CurveAffine, ConcreteCircuit>(
+//     params: &Params<C>,
+//     vk: &VerifyingKey<C>,
+//     circuit: &ConcreteCircuit,
+//     //writer: &mut W,
+//     fd: &mut File,
+// ) -> io::Result<()>
+// where
+//     ConcreteCircuit: Circuit<C::Scalar>,
+// {
+//     use ark_std::{end_timer, start_timer};
+//     let timer = start_timer!(|| "test generate_pk_info ...");
+//     let (fixed, permutation) = generate_pk_info(params, vk, circuit).unwrap();
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "test store fixed ...");
+//     fixed.store(fd)?;
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "test store permutation ...");
+//     permutation.vec_store(fd)?;
+//     end_timer!(timer);
+//     Ok(())
+// }
 
-#[deprecated = "use CircuitData::read and CircuitData::into_proving_key instead"]
-pub fn fetch_pk_info<C: CurveAffine>(
-    params: &Params<C>,
-    vk: &VerifyingKey<C>,
-    reader: &mut File,
-) -> io::Result<ProvingKey<C>> {
-    use ark_std::{end_timer, start_timer};
-    let timer = start_timer!(|| "test fetch fixed...");
-    let fixed = Vec::fetch(reader)?;
-    end_timer!(timer);
-    let timer = start_timer!(|| "test fetch permutation ...");
-    let permutation = Assembly::vec_fetch(reader)?;
-    end_timer!(timer);
-    let pkey = keygen_pk_from_info(params, vk, fixed, permutation).unwrap();
-    Ok(pkey)
-}
+// #[deprecated = "use CircuitData::read and CircuitData::into_proving_key instead"]
+// pub fn fetch_pk_info<C: CurveAffine>(
+//     params: &Params<C>,
+//     vk: &VerifyingKey<C>,
+//     reader: &mut File,
+// ) -> io::Result<ProvingKey<C>> {
+//     use ark_std::{end_timer, start_timer};
+//     let timer = start_timer!(|| "test fetch fixed...");
+//     let fixed = Vec::fetch(reader)?;
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "test fetch permutation ...");
+//     let permutation = Assembly::vec_fetch(reader)?;
+//     end_timer!(timer);
+//     let pkey = keygen_pk_from_info(params, vk, fixed, permutation).unwrap();
+//     Ok(pkey)
+// }

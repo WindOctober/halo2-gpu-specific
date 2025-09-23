@@ -859,618 +859,620 @@ pub fn create_proof<
     create_proof_ext(params, pk, circuits, instances, rng, transcript, true)
 }
 
+// @WindOctober: Comment this to ignore all file operations which is limited in wasm32-unknown-unknown.
 /// generate and write witness to files
-pub fn create_witness<C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
-    params: &Params<C>,
-    pk: &ProvingKey<C>,
-    circuit: &ConcreteCircuit,
-    instances: &[&[C::Scalar]],
-    fd: &mut File,
-) -> Result<(), Error> {
-    let meta = &pk.vk.cs;
-    let unusable_rows_start = params.n as usize - (meta.blinding_factors() + 1);
-    AssignWitnessCollection::store_witness(
-        params,
-        pk,
-        instances,
-        unusable_rows_start,
-        circuit,
-        fd,
-    )?;
-    Ok(())
-}
+// pub fn create_witness<C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
+//     params: &Params<C>,
+//     pk: &ProvingKey<C>,
+//     circuit: &ConcreteCircuit,
+//     instances: &[&[C::Scalar]],
+//     fd: &mut File,
+// ) -> Result<(), Error> {
+//     let meta = &pk.vk.cs;
+//     let unusable_rows_start = params.n as usize - (meta.blinding_factors() + 1);
+//     AssignWitnessCollection::store_witness(
+//         params,
+//         pk,
+//         instances,
+//         unusable_rows_start,
+//         circuit,
+//         fd,
+//     )?;
+//     Ok(())
+// }
 
+// @WindOctober: Comment this to ignore all file operations which is limited in wasm32-unknown-unknown.
 /// create_proof based on vkey and witness
-pub fn create_proof_from_witness<
-    C: CurveAffine,
-    E: EncodedChallenge<C>,
-    R: RngCore,
-    T: TranscriptWrite<C, E>,
->(
-    params: &Params<C>,
-    pk: &ProvingKey<C>,
-    instances: &[&[&[C::Scalar]]],
-    mut rng: R,
-    transcript: &mut T,
-    fd: &mut File,
-    use_gwc: bool,
-) -> Result<(), Error> {
-    let meta = &pk.vk.cs;
-    let domain = &pk.vk.domain;
+// pub fn create_proof_from_witness<
+//     C: CurveAffine,
+//     E: EncodedChallenge<C>,
+//     R: RngCore,
+//     T: TranscriptWrite<C, E>,
+// >(
+//     params: &Params<C>,
+//     pk: &ProvingKey<C>,
+//     instances: &[&[&[C::Scalar]]],
+//     mut rng: R,
+//     transcript: &mut T,
+//     fd: &mut File,
+//     use_gwc: bool,
+// ) -> Result<(), Error> {
+//     let meta = &pk.vk.cs;
+//     let domain = &pk.vk.domain;
 
-    let timer = start_timer!(|| "create single instances");
-    let instance = create_single_instances(params, pk, instances, transcript)?;
+//     let timer = start_timer!(|| "create single instances");
+//     let instance = create_single_instances(params, pk, instances, transcript)?;
 
-    end_timer!(timer);
-    let timer = start_timer!(|| "advice");
-    struct AdviceSingle<C: CurveAffine> {
-        pub advice_polys: Vec<Polynomial<C::Scalar, Coeff>>,
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "advice");
+//     struct AdviceSingle<C: CurveAffine> {
+//         pub advice_polys: Vec<Polynomial<C::Scalar, Coeff>>,
 
-        #[cfg(not(feature = "cuda"))]
-        pub advice_cosets: Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>>,
-    }
+//         #[cfg(not(feature = "cuda"))]
+//         pub advice_cosets: Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>>,
+//     }
 
-    let get_scalar_bits = |x: C::Scalar| {
-        let repr = x.to_repr();
-        let max_scalar_repr_ref: &[u8] = repr.as_ref();
-        max_scalar_repr_ref
-            .iter()
-            .enumerate()
-            .fold(0, |acc, (idx, v)| {
-                if *v == 0 {
-                    acc
-                } else {
-                    idx * 8 + 8 - v.leading_zeros() as usize
-                }
-            })
-    };
+//     let get_scalar_bits = |x: C::Scalar| {
+//         let repr = x.to_repr();
+//         let max_scalar_repr_ref: &[u8] = repr.as_ref();
+//         max_scalar_repr_ref
+//             .iter()
+//             .enumerate()
+//             .fold(0, |acc, (idx, v)| {
+//                 if *v == 0 {
+//                     acc
+//                 } else {
+//                     idx * 8 + 8 - v.leading_zeros() as usize
+//                 }
+//             })
+//     };
 
-    let find_max_scalar_bits = |x: &Vec<C::Scalar>| {
-        get_scalar_bits(x.iter().fold(C::Scalar::zero(), |acc, x| acc.max(*x)))
-    };
+//     let find_max_scalar_bits = |x: &Vec<C::Scalar>| {
+//         get_scalar_bits(x.iter().fold(C::Scalar::zero(), |acc, x| acc.max(*x)))
+//     };
 
-    let advice: Vec<Vec<Polynomial<C::Scalar, LagrangeCoeff>>> = instances
-        .iter()
-        .map(|_| -> Vec<Polynomial<C::Scalar, LagrangeCoeff>> {
-            let unusable_rows_start = params.n as usize - (meta.blinding_factors() + 1);
+//     let advice: Vec<Vec<Polynomial<C::Scalar, LagrangeCoeff>>> = instances
+//         .iter()
+//         .map(|_| -> Vec<Polynomial<C::Scalar, LagrangeCoeff>> {
+//             let unusable_rows_start = params.n as usize - (meta.blinding_factors() + 1);
 
-            let mut advice = AssignWitnessCollection::fetch_witness(params, fd)
-                .expect("fetch witness should not fail");
+//             let mut advice = AssignWitnessCollection::fetch_witness(params, fd)
+//                 .expect("fetch witness should not fail");
 
-            let timer = start_timer!(|| "rng");
-            advice.par_iter_mut().for_each(|advice| {
-                for cell in &mut advice[unusable_rows_start..] {
-                    *cell = C::Scalar::from(u16::rand(&mut OsRng) as u64);
-                }
-            });
-            end_timer!(timer);
+//             let timer = start_timer!(|| "rng");
+//             advice.par_iter_mut().for_each(|advice| {
+//                 for cell in &mut advice[unusable_rows_start..] {
+//                     *cell = C::Scalar::from(u16::rand(&mut OsRng) as u64);
+//                 }
+//             });
+//             end_timer!(timer);
 
-            let timer = start_timer!(|| "commit_lagrange");
-            let advice_commitments_projective: Vec<_> = advice
-                .par_iter()
-                .map(|advice| {
-                    let max_bits = find_max_scalar_bits(&advice.values);
-                    params.commit_lagrange_with_bound(advice, max_bits)
-                })
-                .collect();
-            end_timer!(timer);
+//             let timer = start_timer!(|| "commit_lagrange");
+//             let advice_commitments_projective: Vec<_> = advice
+//                 .par_iter()
+//                 .map(|advice| {
+//                     let max_bits = find_max_scalar_bits(&advice.values);
+//                     params.commit_lagrange_with_bound(advice, max_bits)
+//                 })
+//                 .collect();
+//             end_timer!(timer);
 
-            let timer = start_timer!(|| "advice_commitments_projective");
-            let mut advice_commitments = vec![C::identity(); advice_commitments_projective.len()];
-            C::Curve::batch_normalize(&advice_commitments_projective, &mut advice_commitments);
-            let advice_commitments = advice_commitments;
-            drop(advice_commitments_projective);
-            end_timer!(timer);
+//             let timer = start_timer!(|| "advice_commitments_projective");
+//             let mut advice_commitments = vec![C::identity(); advice_commitments_projective.len()];
+//             C::Curve::batch_normalize(&advice_commitments_projective, &mut advice_commitments);
+//             let advice_commitments = advice_commitments;
+//             drop(advice_commitments_projective);
+//             end_timer!(timer);
 
-            for commitment in &advice_commitments {
-                transcript.write_point(*commitment).unwrap();
-            }
+//             for commitment in &advice_commitments {
+//                 transcript.write_point(*commitment).unwrap();
+//             }
 
-            advice
-        })
-        .collect::<Vec<_>>();
+//             advice
+//         })
+//         .collect::<Vec<_>>();
 
-    // Sample theta challenge for keeping lookup columns linearly independent
-    let theta: ChallengeTheta<_> = transcript.squeeze_challenge_scalar();
+//     // Sample theta challenge for keeping lookup columns linearly independent
+//     let theta: ChallengeTheta<_> = transcript.squeeze_challenge_scalar();
 
-    end_timer!(timer);
-    let timer = start_timer!(|| format!("lookups {}", pk.vk.cs.lookups.len()));
-    let (lookups, lookups_commitments): (Vec<Vec<lookup::prover::Permuted<C>>>, Vec<Vec<[C; 2]>>) =
-        instance
-            .iter()
-            .zip(advice.iter())
-            .map(|(instance, advice)| -> (Vec<_>, Vec<_>) {
-                pk.vk
-                    .cs
-                    .lookups
-                    .par_iter()
-                    .map(|lookup| {
-                        lookup
-                            .commit_permuted(
-                                pk,
-                                params,
-                                domain,
-                                theta,
-                                &advice,
-                                &pk.fixed_values,
-                                &instance.instance_values,
-                                &mut OsRng,
-                            )
-                            .unwrap()
-                    })
-                    .unzip()
-            })
-            .unzip();
+//     end_timer!(timer);
+//     let timer = start_timer!(|| format!("lookups {}", pk.vk.cs.lookups.len()));
+//     let (lookups, lookups_commitments): (Vec<Vec<lookup::prover::Permuted<C>>>, Vec<Vec<[C; 2]>>) =
+//         instance
+//             .iter()
+//             .zip(advice.iter())
+//             .map(|(instance, advice)| -> (Vec<_>, Vec<_>) {
+//                 pk.vk
+//                     .cs
+//                     .lookups
+//                     .par_iter()
+//                     .map(|lookup| {
+//                         lookup
+//                             .commit_permuted(
+//                                 pk,
+//                                 params,
+//                                 domain,
+//                                 theta,
+//                                 &advice,
+//                                 &pk.fixed_values,
+//                                 &instance.instance_values,
+//                                 &mut OsRng,
+//                             )
+//                             .unwrap()
+//                     })
+//                     .unzip()
+//             })
+//             .unzip();
 
-    lookups_commitments.into_iter().for_each(|x| {
-        x.iter().for_each(|x| {
-            transcript.write_point(x[0]).unwrap();
-            transcript.write_point(x[1]).unwrap();
-        })
-    });
-    end_timer!(timer);
+//     lookups_commitments.into_iter().for_each(|x| {
+//         x.iter().for_each(|x| {
+//             transcript.write_point(x[0]).unwrap();
+//             transcript.write_point(x[1]).unwrap();
+//         })
+//     });
+//     end_timer!(timer);
 
-    let shuffle_groups = pk.vk.cs.shuffles.group(pk.vk.cs.degree());
-    let timer = start_timer!(|| format!(
-        "total shuffles {}, groups {}",
-        pk.vk.cs.shuffles.0.len(),
-        shuffle_groups.len()
-    ));
-    let shuffles: Vec<Vec<shuffle::prover::Compressed<C>>> = instance
-        .iter()
-        .zip(advice.iter())
-        .map(|(instance, advice)| -> Vec<_> {
-            shuffle_groups
-                .par_iter()
-                .map(|shuffle| {
-                    shuffle
-                        .compress(
-                            pk,
-                            params,
-                            theta,
-                            &advice,
-                            &pk.fixed_values,
-                            &instance.instance_values,
-                        )
-                        .unwrap()
-                })
-                .collect()
-        })
-        .collect();
+//     let shuffle_groups = pk.vk.cs.shuffles.group(pk.vk.cs.degree());
+//     let timer = start_timer!(|| format!(
+//         "total shuffles {}, groups {}",
+//         pk.vk.cs.shuffles.0.len(),
+//         shuffle_groups.len()
+//     ));
+//     let shuffles: Vec<Vec<shuffle::prover::Compressed<C>>> = instance
+//         .iter()
+//         .zip(advice.iter())
+//         .map(|(instance, advice)| -> Vec<_> {
+//             shuffle_groups
+//                 .par_iter()
+//                 .map(|shuffle| {
+//                     shuffle
+//                         .compress(
+//                             pk,
+//                             params,
+//                             theta,
+//                             &advice,
+//                             &pk.fixed_values,
+//                             &instance.instance_values,
+//                         )
+//                         .unwrap()
+//                 })
+//                 .collect()
+//         })
+//         .collect();
 
-    end_timer!(timer);
+//     end_timer!(timer);
 
-    // Sample beta challenge
-    let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
-    // Sample gamma challenge
-    let gamma: ChallengeGamma<_> = transcript.squeeze_challenge_scalar();
+//     // Sample beta challenge
+//     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
+//     // Sample gamma challenge
+//     let gamma: ChallengeGamma<_> = transcript.squeeze_challenge_scalar();
 
-    let (lookups, shuffles, permutations) = std::thread::scope(|s| {
-        let permutations = s.spawn(|| {
-            // prepare permutation value.
-            instance
-                .iter()
-                .zip(advice.iter())
-                .map(|(instance, advice)| {
-                    pk.vk.cs.permutation.commit(
-                        params,
-                        pk,
-                        &pk.permutation,
-                        &advice,
-                        &pk.fixed_values,
-                        &instance.instance_values,
-                        beta,
-                        gamma.clone(),
-                        &mut OsRng,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap()
-        });
+//     let (lookups, shuffles, permutations) = std::thread::scope(|s| {
+//         let permutations = s.spawn(|| {
+//             // prepare permutation value.
+//             instance
+//                 .iter()
+//                 .zip(advice.iter())
+//                 .map(|(instance, advice)| {
+//                     pk.vk.cs.permutation.commit(
+//                         params,
+//                         pk,
+//                         &pk.permutation,
+//                         &advice,
+//                         &pk.fixed_values,
+//                         &instance.instance_values,
+//                         beta,
+//                         gamma.clone(),
+//                         &mut OsRng,
+//                     )
+//                 })
+//                 .collect::<Result<Vec<_>, _>>()
+//                 .unwrap()
+//         });
 
-        let timer = start_timer!(|| "lookups commit product");
-        let lookups: Vec<Vec<_>> = lookups
-            .into_iter()
-            .map(|lookups| {
-                lookups
-                    .into_par_iter()
-                    .map(|lookup| lookup.commit_product(pk, params, beta, gamma).unwrap())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        end_timer!(timer);
+//         let timer = start_timer!(|| "lookups commit product");
+//         let lookups: Vec<Vec<_>> = lookups
+//             .into_iter()
+//             .map(|lookups| {
+//                 lookups
+//                     .into_par_iter()
+//                     .map(|lookup| lookup.commit_product(pk, params, beta, gamma).unwrap())
+//                     .collect::<Vec<_>>()
+//             })
+//             .collect::<Vec<_>>();
+//         end_timer!(timer);
 
-        let timer = start_timer!(|| "lookups add blinding value");
-        let lookups: Vec<Vec<_>> = lookups
-            .into_iter()
-            .map(|lookups| {
-                lookups
-                    .into_iter()
-                    .map(|(l0, l1, mut z)| {
-                        for _ in 0..pk.vk.cs.blinding_factors() {
-                            z.push(C::Scalar::random(&mut rng))
-                        }
-                        (l0, l1, pk.vk.domain.lagrange_from_vec(z))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<Vec<_>>>();
-        end_timer!(timer);
+//         let timer = start_timer!(|| "lookups add blinding value");
+//         let lookups: Vec<Vec<_>> = lookups
+//             .into_iter()
+//             .map(|lookups| {
+//                 lookups
+//                     .into_iter()
+//                     .map(|(l0, l1, mut z)| {
+//                         for _ in 0..pk.vk.cs.blinding_factors() {
+//                             z.push(C::Scalar::random(&mut rng))
+//                         }
+//                         (l0, l1, pk.vk.domain.lagrange_from_vec(z))
+//                     })
+//                     .collect::<Vec<_>>()
+//             })
+//             .collect::<Vec<Vec<_>>>();
+//         end_timer!(timer);
 
-        let timer = start_timer!(|| "lookups msm and fft");
-        let (lookups_z_commitments, lookups): (Vec<Vec<_>>, Vec<Vec<_>>) = lookups
-            .into_iter()
-            .map(|lookups| {
-                lookups
-                    .into_par_iter()
-                    .map(|l| {
-                        let (product_poly, c) = params.commit_lagrange_and_ifft(
-                            l.2,
-                            &pk.vk.domain.get_omega_inv(),
-                            &pk.vk.domain.ifft_divisor,
-                        );
-                        let c = c.to_affine();
-                        (
-                            c,
-                            lookup::prover::Committed {
-                                permuted_input_poly: pk.vk.domain.lagrange_to_coeff_st(l.0),
-                                permuted_table_poly: pk.vk.domain.lagrange_to_coeff_st(l.1),
-                                product_poly,
-                            },
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .unzip()
-            })
-            .unzip();
-        end_timer!(timer);
+//         let timer = start_timer!(|| "lookups msm and fft");
+//         let (lookups_z_commitments, lookups): (Vec<Vec<_>>, Vec<Vec<_>>) = lookups
+//             .into_iter()
+//             .map(|lookups| {
+//                 lookups
+//                     .into_par_iter()
+//                     .map(|l| {
+//                         let (product_poly, c) = params.commit_lagrange_and_ifft(
+//                             l.2,
+//                             &pk.vk.domain.get_omega_inv(),
+//                             &pk.vk.domain.ifft_divisor,
+//                         );
+//                         let c = c.to_affine();
+//                         (
+//                             c,
+//                             lookup::prover::Committed {
+//                                 permuted_input_poly: pk.vk.domain.lagrange_to_coeff_st(l.0),
+//                                 permuted_table_poly: pk.vk.domain.lagrange_to_coeff_st(l.1),
+//                                 product_poly,
+//                             },
+//                         )
+//                     })
+//                     .collect::<Vec<_>>()
+//                     .into_iter()
+//                     .unzip()
+//             })
+//             .unzip();
+//         end_timer!(timer);
 
-        let timer = start_timer!(|| "shuffles commit product");
-        let shuffles: Vec<Vec<_>> = shuffles
-            .into_iter()
-            .map(|shuffles| {
-                shuffles
-                    .into_par_iter()
-                    .map(|shuffle| shuffle.commit_product(pk, params, beta).unwrap())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        end_timer!(timer);
+//         let timer = start_timer!(|| "shuffles commit product");
+//         let shuffles: Vec<Vec<_>> = shuffles
+//             .into_iter()
+//             .map(|shuffles| {
+//                 shuffles
+//                     .into_par_iter()
+//                     .map(|shuffle| shuffle.commit_product(pk, params, beta).unwrap())
+//                     .collect::<Vec<_>>()
+//             })
+//             .collect::<Vec<_>>();
+//         end_timer!(timer);
 
-        let timer = start_timer!(|| "shuffles add blinding value");
-        let shuffles: Vec<Vec<_>> = shuffles
-            .into_iter()
-            .map(|shuffles| {
-                shuffles
-                    .into_iter()
-                    .map(|mut z| {
-                        for _ in 0..pk.vk.cs.blinding_factors() {
-                            z.push(C::Scalar::random(&mut rng))
-                        }
-                        assert_eq!(z.len(), params.n as usize);
-                        pk.vk.domain.lagrange_from_vec(z)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<Vec<_>>>();
-        end_timer!(timer);
+//         let timer = start_timer!(|| "shuffles add blinding value");
+//         let shuffles: Vec<Vec<_>> = shuffles
+//             .into_iter()
+//             .map(|shuffles| {
+//                 shuffles
+//                     .into_iter()
+//                     .map(|mut z| {
+//                         for _ in 0..pk.vk.cs.blinding_factors() {
+//                             z.push(C::Scalar::random(&mut rng))
+//                         }
+//                         assert_eq!(z.len(), params.n as usize);
+//                         pk.vk.domain.lagrange_from_vec(z)
+//                     })
+//                     .collect::<Vec<_>>()
+//             })
+//             .collect::<Vec<Vec<_>>>();
+//         end_timer!(timer);
 
-        let timer = start_timer!(|| "shuffles msm and fft");
-        let (shuffles_z_commitments, shuffles): (Vec<Vec<_>>, Vec<Vec<_>>) = shuffles
-            .into_iter()
-            .map(|shuffles| {
-                shuffles
-                    .into_par_iter()
-                    .map(|l| {
-                        let (product_poly, c) = params.commit_lagrange_and_ifft(
-                            l,
-                            &pk.vk.domain.get_omega_inv(),
-                            &pk.vk.domain.ifft_divisor,
-                        );
-                        let c = c.to_affine();
-                        (c, shuffle::prover::Committed { product_poly })
-                    })
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .unzip()
-            })
-            .unzip();
-        end_timer!(timer);
+//         let timer = start_timer!(|| "shuffles msm and fft");
+//         let (shuffles_z_commitments, shuffles): (Vec<Vec<_>>, Vec<Vec<_>>) = shuffles
+//             .into_iter()
+//             .map(|shuffles| {
+//                 shuffles
+//                     .into_par_iter()
+//                     .map(|l| {
+//                         let (product_poly, c) = params.commit_lagrange_and_ifft(
+//                             l,
+//                             &pk.vk.domain.get_omega_inv(),
+//                             &pk.vk.domain.ifft_divisor,
+//                         );
+//                         let c = c.to_affine();
+//                         (c, shuffle::prover::Committed { product_poly })
+//                     })
+//                     .collect::<Vec<_>>()
+//                     .into_iter()
+//                     .unzip()
+//             })
+//             .unzip();
+//         end_timer!(timer);
 
-        let timer = start_timer!(|| "permutation commit");
-        let permutations = permutations
-            .join()
-            .expect("permutations thread failed unexpectedly");
+//         let timer = start_timer!(|| "permutation commit");
+//         let permutations = permutations
+//             .join()
+//             .expect("permutations thread failed unexpectedly");
 
-        let permutations: Vec<_> = permutations
-            .into_iter()
-            .map(|permutations| {
-                let (c, sets): (Vec<_>, _) = permutations
-                    .into_par_iter()
-                    .map(|z| {
-                        let (permutation_product_poly, permutation_product_commitment_projective) =
-                            params.commit_lagrange_and_ifft(
-                                z,
-                                &pk.vk.domain.get_omega_inv(),
-                                &pk.vk.domain.ifft_divisor,
-                            );
+//         let permutations: Vec<_> = permutations
+//             .into_iter()
+//             .map(|permutations| {
+//                 let (c, sets): (Vec<_>, _) = permutations
+//                     .into_par_iter()
+//                     .map(|z| {
+//                         let (permutation_product_poly, permutation_product_commitment_projective) =
+//                             params.commit_lagrange_and_ifft(
+//                                 z,
+//                                 &pk.vk.domain.get_omega_inv(),
+//                                 &pk.vk.domain.ifft_divisor,
+//                             );
 
-                        #[cfg(not(feature = "cuda"))]
-                        let permutation_product_coset =
-                            domain.coeff_to_extended(permutation_product_poly.clone());
+//                         #[cfg(not(feature = "cuda"))]
+//                         let permutation_product_coset =
+//                             domain.coeff_to_extended(permutation_product_poly.clone());
 
-                        let permutation_product_commitment =
-                            permutation_product_commitment_projective.to_affine();
+//                         let permutation_product_commitment =
+//                             permutation_product_commitment_projective.to_affine();
 
-                        (
-                            permutation_product_commitment,
-                            permutation::prover::CommittedSet {
-                                permutation_product_poly,
-                                #[cfg(not(feature = "cuda"))]
-                                permutation_product_coset,
-                            },
-                        )
-                    })
-                    .unzip();
-                (c, permutation::prover::Committed { sets })
-            })
-            .collect();
+//                         (
+//                             permutation_product_commitment,
+//                             permutation::prover::CommittedSet {
+//                                 permutation_product_poly,
+//                                 #[cfg(not(feature = "cuda"))]
+//                                 permutation_product_coset,
+//                             },
+//                         )
+//                     })
+//                     .unzip();
+//                 (c, permutation::prover::Committed { sets })
+//             })
+//             .collect();
 
-        for (cl, _) in permutations.iter() {
-            for c in cl {
-                transcript.write_point(*c).unwrap();
-            }
-        }
+//         for (cl, _) in permutations.iter() {
+//             for c in cl {
+//                 transcript.write_point(*c).unwrap();
+//             }
+//         }
 
-        let permutations: Vec<_> = permutations.into_iter().map(|x| x.1).collect();
-        end_timer!(timer);
+//         let permutations: Vec<_> = permutations.into_iter().map(|x| x.1).collect();
+//         end_timer!(timer);
 
-        lookups_z_commitments
-            .into_iter()
-            .for_each(|lookups_z_commitments| {
-                lookups_z_commitments
-                    .into_iter()
-                    .for_each(|lookups_z_commitment| {
-                        transcript.write_point(lookups_z_commitment).unwrap()
-                    })
-            });
-        shuffles_z_commitments
-            .into_iter()
-            .for_each(|shuffles_z_commitments| {
-                shuffles_z_commitments
-                    .into_iter()
-                    .for_each(|shuffles_z_commitment| {
-                        transcript.write_point(shuffles_z_commitment).unwrap()
-                    })
-            });
+//         lookups_z_commitments
+//             .into_iter()
+//             .for_each(|lookups_z_commitments| {
+//                 lookups_z_commitments
+//                     .into_iter()
+//                     .for_each(|lookups_z_commitment| {
+//                         transcript.write_point(lookups_z_commitment).unwrap()
+//                     })
+//             });
+//         shuffles_z_commitments
+//             .into_iter()
+//             .for_each(|shuffles_z_commitments| {
+//                 shuffles_z_commitments
+//                     .into_iter()
+//                     .for_each(|shuffles_z_commitment| {
+//                         transcript.write_point(shuffles_z_commitment).unwrap()
+//                     })
+//             });
 
-        (lookups, shuffles, permutations)
-    });
+//         (lookups, shuffles, permutations)
+//     });
 
-    let timer = start_timer!(|| "vanishing commit");
-    // Commit to the vanishing argument's random polynomial for blinding h(x_3)
-    let vanishing = vanishing::Argument::commit(params, domain, rng, transcript)?;
+//     let timer = start_timer!(|| "vanishing commit");
+//     // Commit to the vanishing argument's random polynomial for blinding h(x_3)
+//     let vanishing = vanishing::Argument::commit(params, domain, rng, transcript)?;
 
-    // Obtain challenge for keeping all separate gates linearly independent
-    let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
+//     // Obtain challenge for keeping all separate gates linearly independent
+//     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
 
-    end_timer!(timer);
-    let timer = start_timer!(|| "h_poly");
-    // Evaluate the h(X) polynomial
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "h_poly");
+//     // Evaluate the h(X) polynomial
 
-    let advice = advice
-        .into_iter()
-        .map(|advice| {
-            let timer = start_timer!(|| "lagrange_to_coeff_st");
-            let advice_polys: Vec<_> = advice
-                .into_par_iter()
-                .map(|poly| domain.lagrange_to_coeff_st(poly))
-                .collect();
-            end_timer!(timer);
+//     let advice = advice
+//         .into_iter()
+//         .map(|advice| {
+//             let timer = start_timer!(|| "lagrange_to_coeff_st");
+//             let advice_polys: Vec<_> = advice
+//                 .into_par_iter()
+//                 .map(|poly| domain.lagrange_to_coeff_st(poly))
+//                 .collect();
+//             end_timer!(timer);
 
-            #[cfg(not(feature = "cuda"))]
-            let advice_cosets: Vec<_> = advice_polys
-                .iter()
-                .map(|poly| domain.coeff_to_extended(poly.clone()))
-                .collect();
+//             #[cfg(not(feature = "cuda"))]
+//             let advice_cosets: Vec<_> = advice_polys
+//                 .iter()
+//                 .map(|poly| domain.coeff_to_extended(poly.clone()))
+//                 .collect();
 
-            AdviceSingle::<C> {
-                advice_polys,
-                #[cfg(not(feature = "cuda"))]
-                advice_cosets,
-            }
-        })
-        .collect::<Vec<_>>();
+//             AdviceSingle::<C> {
+//                 advice_polys,
+//                 #[cfg(not(feature = "cuda"))]
+//                 advice_cosets,
+//             }
+//         })
+//         .collect::<Vec<_>>();
 
-    #[cfg(feature = "cuda")]
-    let h_poly = pk.ev.evaluate_h(
-        pk,
-        advice.iter().map(|a| &a.advice_polys).collect(),
-        instance.iter().map(|i| &i.instance_polys).collect(),
-        *y,
-        *beta,
-        *gamma,
-        *theta,
-        &lookups,
-        &shuffles,
-        &permutations,
-    );
+//     #[cfg(feature = "cuda")]
+//     let h_poly = pk.ev.evaluate_h(
+//         pk,
+//         advice.iter().map(|a| &a.advice_polys).collect(),
+//         instance.iter().map(|i| &i.instance_polys).collect(),
+//         *y,
+//         *beta,
+//         *gamma,
+//         *theta,
+//         &lookups,
+//         &shuffles,
+//         &permutations,
+//     );
 
-    #[cfg(not(feature = "cuda"))]
-    let h_poly = pk.ev.evaluate_h(
-        pk,
-        advice.iter().map(|a| &a.advice_cosets).collect(),
-        instance.iter().map(|i| &i.instance_cosets).collect(),
-        *y,
-        *beta,
-        *gamma,
-        *theta,
-        &lookups,
-        &shuffles,
-        &permutations,
-    );
+//     #[cfg(not(feature = "cuda"))]
+//     let h_poly = pk.ev.evaluate_h(
+//         pk,
+//         advice.iter().map(|a| &a.advice_cosets).collect(),
+//         instance.iter().map(|i| &i.instance_cosets).collect(),
+//         *y,
+//         *beta,
+//         *gamma,
+//         *theta,
+//         &lookups,
+//         &shuffles,
+//         &permutations,
+//     );
 
-    end_timer!(timer);
-    let timer = start_timer!(|| "vanishing construct");
-    // Construct the vanishing argument's h(X) commitments
-    let vanishing = vanishing.construct(params, domain, h_poly, transcript)?;
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "vanishing construct");
+//     // Construct the vanishing argument's h(X) commitments
+//     let vanishing = vanishing.construct(params, domain, h_poly, transcript)?;
 
-    let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
-    let xn = x.pow(&[params.n as u64, 0, 0, 0]);
-    end_timer!(timer);
+//     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
+//     let xn = x.pow(&[params.n as u64, 0, 0, 0]);
+//     end_timer!(timer);
 
-    let timer = start_timer!(|| "eval poly");
+//     let timer = start_timer!(|| "eval poly");
 
-    let mut inputs = vec![];
+//     let mut inputs = vec![];
 
-    // Compute and hash instance evals for each circuit instance
-    for instance in instance.iter() {
-        // Evaluate polynomials at omega^i x
-        meta.instance_queries.iter().for_each(|&(column, at)| {
-            inputs.push((
-                &instance.instance_polys[column.index()],
-                domain.rotate_omega(*x, at),
-            ))
-        })
-    }
+//     // Compute and hash instance evals for each circuit instance
+//     for instance in instance.iter() {
+//         // Evaluate polynomials at omega^i x
+//         meta.instance_queries.iter().for_each(|&(column, at)| {
+//             inputs.push((
+//                 &instance.instance_polys[column.index()],
+//                 domain.rotate_omega(*x, at),
+//             ))
+//         })
+//     }
 
-    // Compute and hash advice evals for each circuit instance
-    for advice in advice.iter() {
-        // Evaluate polynomials at omega^i x
-        meta.advice_queries.iter().for_each(|&(column, at)| {
-            inputs.push((
-                &advice.advice_polys[column.index()],
-                domain.rotate_omega(*x, at),
-            ))
-        })
-    }
+//     // Compute and hash advice evals for each circuit instance
+//     for advice in advice.iter() {
+//         // Evaluate polynomials at omega^i x
+//         meta.advice_queries.iter().for_each(|&(column, at)| {
+//             inputs.push((
+//                 &advice.advice_polys[column.index()],
+//                 domain.rotate_omega(*x, at),
+//             ))
+//         })
+//     }
 
-    // Compute and hash fixed evals (shared across all circuit instances)
-    meta.fixed_queries.iter().for_each(|&(column, at)| {
-        inputs.push((&pk.fixed_polys[column.index()], domain.rotate_omega(*x, at)))
-    });
+//     // Compute and hash fixed evals (shared across all circuit instances)
+//     meta.fixed_queries.iter().for_each(|&(column, at)| {
+//         inputs.push((&pk.fixed_polys[column.index()], domain.rotate_omega(*x, at)))
+//     });
 
-    for eval in inputs
-        .into_par_iter()
-        .map(|(a, b)| eval_polynomial_st(a, b))
-        .collect::<Vec<_>>()
-    {
-        transcript.write_scalar(eval)?;
-    }
+//     for eval in inputs
+//         .into_par_iter()
+//         .map(|(a, b)| eval_polynomial_st(a, b))
+//         .collect::<Vec<_>>()
+//     {
+//         transcript.write_scalar(eval)?;
+//     }
 
-    end_timer!(timer);
-    let timer = start_timer!(|| "eval poly vanishing");
-    let vanishing = vanishing.evaluate(x, xn, domain, transcript)?;
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "eval poly vanishing");
+//     let vanishing = vanishing.evaluate(x, xn, domain, transcript)?;
 
-    end_timer!(timer);
-    let timer = start_timer!(|| "eval poly permutation");
-    // Evaluate common permutation data
-    pk.permutation.evaluate(x, transcript)?;
+//     end_timer!(timer);
+//     let timer = start_timer!(|| "eval poly permutation");
+//     // Evaluate common permutation data
+//     pk.permutation.evaluate(x, transcript)?;
 
-    // Evaluate the permutations, if any, at omega^i x.
-    let permutations: Vec<permutation::prover::Evaluated<C>> = permutations
-        .into_iter()
-        .map(|permutation| -> Result<_, _> { permutation.construct().evaluate(pk, x, transcript) })
-        .collect::<Result<Vec<_>, _>>()?;
+//     // Evaluate the permutations, if any, at omega^i x.
+//     let permutations: Vec<permutation::prover::Evaluated<C>> = permutations
+//         .into_iter()
+//         .map(|permutation| -> Result<_, _> { permutation.construct().evaluate(pk, x, transcript) })
+//         .collect::<Result<Vec<_>, _>>()?;
 
-    end_timer!(timer);
+//     end_timer!(timer);
 
-    let timer = start_timer!(|| "eval poly lookups");
-    // Evaluate the lookups, if any, at omega^i x.
-    let (lookups, evals): (
-        Vec<Vec<lookup::prover::Evaluated<C>>>,
-        Vec<Vec<Vec<C::ScalarExt>>>,
-    ) = lookups
-        .into_iter()
-        .map(|lookups| lookups.into_par_iter().map(|p| p.evaluate(pk, x)).unzip())
-        .unzip();
-    evals.into_iter().for_each(|evals| {
-        evals.into_iter().for_each(|evals| {
-            evals
-                .into_iter()
-                .for_each(|eval| transcript.write_scalar(eval).unwrap())
-        })
-    });
-    end_timer!(timer);
+//     let timer = start_timer!(|| "eval poly lookups");
+//     // Evaluate the lookups, if any, at omega^i x.
+//     let (lookups, evals): (
+//         Vec<Vec<lookup::prover::Evaluated<C>>>,
+//         Vec<Vec<Vec<C::ScalarExt>>>,
+//     ) = lookups
+//         .into_iter()
+//         .map(|lookups| lookups.into_par_iter().map(|p| p.evaluate(pk, x)).unzip())
+//         .unzip();
+//     evals.into_iter().for_each(|evals| {
+//         evals.into_iter().for_each(|evals| {
+//             evals
+//                 .into_iter()
+//                 .for_each(|eval| transcript.write_scalar(eval).unwrap())
+//         })
+//     });
+//     end_timer!(timer);
 
-    let timer = start_timer!(|| "eval poly shuffles");
-    // Evaluate the shuffles, if any, at omega^i x.
-    let (shuffles, evals): (
-        Vec<Vec<shuffle::prover::Evaluated<C>>>,
-        Vec<Vec<Vec<C::ScalarExt>>>,
-    ) = shuffles
-        .into_iter()
-        .map(|shuffles| shuffles.into_par_iter().map(|s| s.evaluate(pk, x)).unzip())
-        .unzip();
-    evals.into_iter().for_each(|evals| {
-        evals.into_iter().for_each(|evals| {
-            evals
-                .into_iter()
-                .for_each(|eval| transcript.write_scalar(eval).unwrap())
-        })
-    });
-    end_timer!(timer);
+//     let timer = start_timer!(|| "eval poly shuffles");
+//     // Evaluate the shuffles, if any, at omega^i x.
+//     let (shuffles, evals): (
+//         Vec<Vec<shuffle::prover::Evaluated<C>>>,
+//         Vec<Vec<Vec<C::ScalarExt>>>,
+//     ) = shuffles
+//         .into_iter()
+//         .map(|shuffles| shuffles.into_par_iter().map(|s| s.evaluate(pk, x)).unzip())
+//         .unzip();
+//     evals.into_iter().for_each(|evals| {
+//         evals.into_iter().for_each(|evals| {
+//             evals
+//                 .into_iter()
+//                 .for_each(|eval| transcript.write_scalar(eval).unwrap())
+//         })
+//     });
+//     end_timer!(timer);
 
-    let timer = start_timer!(|| "multi open");
-    let instances = instance
-        .iter()
-        .zip(advice.iter())
-        .zip(permutations.iter())
-        .zip(lookups.iter())
-        .zip(shuffles.iter())
-        .flat_map(|((((instance, advice), permutation), lookups), shuffles)| {
-            iter::empty()
-                .chain(
-                    pk.vk
-                        .cs
-                        .instance_queries
-                        .iter()
-                        .map(move |&(column, at)| ProverQuery {
-                            point: domain.rotate_omega(*x, at),
-                            rotation: at,
-                            poly: &instance.instance_polys[column.index()],
-                        }),
-                )
-                .chain(
-                    pk.vk
-                        .cs
-                        .advice_queries
-                        .iter()
-                        .map(move |&(column, at)| ProverQuery {
-                            point: domain.rotate_omega(*x, at),
-                            rotation: at,
-                            poly: &advice.advice_polys[column.index()],
-                        }),
-                )
-                .chain(permutation.open(pk, x))
-                .chain(lookups.iter().flat_map(move |p| p.open(pk, x)).into_iter())
-                .chain(shuffles.iter().flat_map(move |p| p.open(pk, x)).into_iter())
-        })
-        .chain(
-            pk.vk
-                .cs
-                .fixed_queries
-                .iter()
-                .map(|&(column, at)| ProverQuery {
-                    point: domain.rotate_omega(*x, at),
-                    rotation: at,
-                    poly: &pk.fixed_polys[column.index()],
-                }),
-        )
-        .chain(pk.permutation.open(x))
-        // We query the h(X) polynomial at x
-        .chain(vanishing.open(x));
+//     let timer = start_timer!(|| "multi open");
+//     let instances = instance
+//         .iter()
+//         .zip(advice.iter())
+//         .zip(permutations.iter())
+//         .zip(lookups.iter())
+//         .zip(shuffles.iter())
+//         .flat_map(|((((instance, advice), permutation), lookups), shuffles)| {
+//             iter::empty()
+//                 .chain(
+//                     pk.vk
+//                         .cs
+//                         .instance_queries
+//                         .iter()
+//                         .map(move |&(column, at)| ProverQuery {
+//                             point: domain.rotate_omega(*x, at),
+//                             rotation: at,
+//                             poly: &instance.instance_polys[column.index()],
+//                         }),
+//                 )
+//                 .chain(
+//                     pk.vk
+//                         .cs
+//                         .advice_queries
+//                         .iter()
+//                         .map(move |&(column, at)| ProverQuery {
+//                             point: domain.rotate_omega(*x, at),
+//                             rotation: at,
+//                             poly: &advice.advice_polys[column.index()],
+//                         }),
+//                 )
+//                 .chain(permutation.open(pk, x))
+//                 .chain(lookups.iter().flat_map(move |p| p.open(pk, x)).into_iter())
+//                 .chain(shuffles.iter().flat_map(move |p| p.open(pk, x)).into_iter())
+//         })
+//         .chain(
+//             pk.vk
+//                 .cs
+//                 .fixed_queries
+//                 .iter()
+//                 .map(|&(column, at)| ProverQuery {
+//                     point: domain.rotate_omega(*x, at),
+//                     rotation: at,
+//                     poly: &pk.fixed_polys[column.index()],
+//                 }),
+//         )
+//         .chain(pk.permutation.open(x))
+//         // We query the h(X) polynomial at x
+//         .chain(vanishing.open(x));
 
-    let res = if use_gwc {
-        multiopen::gwc::create_proof(params, transcript, instances).map_err(|_| Error::Opening)
-    } else {
-        multiopen::shplonk::create_proof(params, transcript, instances).map_err(|_| Error::Opening)
-    };
-    end_timer!(timer);
+//     let res = if use_gwc {
+//         multiopen::gwc::create_proof(params, transcript, instances).map_err(|_| Error::Opening)
+//     } else {
+//         multiopen::shplonk::create_proof(params, transcript, instances).map_err(|_| Error::Opening)
+//     };
+//     end_timer!(timer);
 
-    res
-}
+//     res
+// }
 
 pub fn generate_advice_from_synthesize<'a, C: CurveAffine, ConcreteCircuit: Circuit<C::Scalar>>(
     params: &'a Params<C>,
